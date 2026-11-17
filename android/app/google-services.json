@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "612421095742",
+    "project_id": "safewear-d6300",
+    "storage_bucket": "safewear-d6300.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:612421095742:android:520a62822639a547bf5c6f",
+        "android_client_info": {
+          "package_name": "com.example.smart_safety_wearable"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBDJCTC5Mwm5PtXMmUN20ulxmmwZg9KUPU"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
