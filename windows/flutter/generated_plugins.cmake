@@ -7,6 +7,7 @@ list(APPEND FLUTTER_PLUGIN_LIST
   cloud_firestore
   firebase_auth
   flutter_blue_plus_winrt
+  geolocator_windows
   permission_handler_windows
 )
 
