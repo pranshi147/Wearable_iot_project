@@ -7,6 +7,10 @@ import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'firebase_options.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:google_sign_in/google_sign_in.dart';
+import 'package:flutter/foundation.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -14,6 +18,10 @@ void main() async {
   await Firebase.initializeApp(
     options: DefaultFirebaseOptions.currentPlatform,
   );
+
+  if (!kIsWeb) {
+    await GoogleSignIn.instance.initialize();
+  }
 
   runApp(const SafetyApp());
 }
@@ -35,10 +43,300 @@ class SafetyApp extends StatelessWidget {
         ),
         useMaterial3: true,
       ),
-      home: const Dashboard(),
+      home: const AuthGate(),
     );
   }
 }
+
+
+class AuthGate extends StatelessWidget {
+  const AuthGate({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<User?>(
+      stream: FirebaseAuth.instance.authStateChanges(),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Scaffold(
+            body: Center(child: CircularProgressIndicator()),
+          );
+        }
+
+        if (snapshot.hasData) {
+          return const Dashboard();
+        }
+
+        return const AuthPage();
+      },
+    );
+  }
+}
+
+class AuthPage extends StatefulWidget {
+  const AuthPage({super.key});
+
+  @override
+  State<AuthPage> createState() => _AuthPageState();
+}
+
+class _AuthPageState extends State<AuthPage> {
+  final emailController = TextEditingController();
+  final passwordController = TextEditingController();
+  final nameController = TextEditingController();
+  final phoneController = TextEditingController();
+
+  bool isLogin = true;
+  bool loading = false;
+
+  Future<void> saveUser(User user, {
+    String? name,
+    String? phone,
+  }) async {
+    await FirebaseFirestore.instance
+        .collection('users')
+        .doc(user.uid)
+        .set({
+      'name': name ?? user.displayName ?? '',
+      'email': user.email ?? '',
+      'phone': phone ?? '',
+      'createdAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+  }
+
+  Future<void> emailAuthentication() async {
+    setState(() => loading = true);
+
+    try {
+      final auth = FirebaseAuth.instance;
+      UserCredential result;
+
+      if (isLogin) {
+        result = await auth.signInWithEmailAndPassword(
+          email: emailController.text.trim(),
+          password: passwordController.text.trim(),
+        );
+      } else {
+        result = await auth.createUserWithEmailAndPassword(
+          email: emailController.text.trim(),
+          password: passwordController.text.trim(),
+        );
+
+        await result.user?.updateDisplayName(
+          nameController.text.trim(),
+        );
+      }
+
+      if (result.user != null) {
+        await saveUser(
+          result.user!,
+          name: nameController.text.trim().isEmpty
+              ? null
+              : nameController.text.trim(),
+          phone: phoneController.text.trim(),
+        );
+      }
+    } on FirebaseAuthException catch (e) {
+      showError(e.message ?? 'Authentication failed');
+    } catch (e) {
+      showError(e.toString());
+    } finally {
+      if (mounted) setState(() => loading = false);
+    }
+  }
+
+  Future<void> googleAuthentication() async {
+    setState(() => loading = true);
+
+    try {
+      UserCredential result;
+
+      if (kIsWeb) {
+        final provider = GoogleAuthProvider();
+        result = await FirebaseAuth.instance.signInWithPopup(provider);
+      } else {
+        final account =
+            await GoogleSignIn.instance.authenticate();
+
+        final googleAuth = account.authentication;
+
+        final credential = GoogleAuthProvider.credential(
+          idToken: googleAuth.idToken,
+        );
+
+        result = await FirebaseAuth.instance.signInWithCredential(
+          credential,
+        );
+      }
+
+      if (result.user != null) {
+        await saveUser(result.user!);
+      }
+    } catch (e) {
+      showError(e.toString());
+    } finally {
+      if (mounted) setState(() => loading = false);
+    }
+  }
+
+  void showError(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
+  }
+
+  @override
+  void dispose() {
+    emailController.dispose();
+    passwordController.dispose();
+    nameController.dispose();
+    phoneController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Center(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(25),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 420),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(
+                  Icons.shield,
+                  size: 75,
+                  color: Colors.blueAccent,
+                ),
+                const SizedBox(height: 15),
+
+                const Text(
+                  'SafeWear',
+                  style: TextStyle(
+                    fontSize: 32,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+
+                const SizedBox(height: 8),
+
+                Text(
+                  isLogin
+                      ? 'Welcome Back!'
+                      : 'Create Your Account',
+                  style: const TextStyle(
+                    fontSize: 20,
+                    color: Colors.white70,
+                  ),
+                ),
+
+                const SizedBox(height: 30),
+
+                if (!isLogin) ...[
+                  TextField(
+                    controller: nameController,
+                    decoration: const InputDecoration(
+                      labelText: 'Full Name',
+                      prefixIcon: Icon(Icons.person),
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                  const SizedBox(height: 15),
+
+                  TextField(
+                    controller: phoneController,
+                    keyboardType: TextInputType.phone,
+                    decoration: const InputDecoration(
+                      labelText: 'Phone Number',
+                      prefixIcon: Icon(Icons.phone),
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                  const SizedBox(height: 15),
+                ],
+
+                TextField(
+                  controller: emailController,
+                  keyboardType: TextInputType.emailAddress,
+                  decoration: const InputDecoration(
+                    labelText: 'Email Address',
+                    prefixIcon: Icon(Icons.email),
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+
+                const SizedBox(height: 15),
+
+                TextField(
+                  controller: passwordController,
+                  obscureText: true,
+                  decoration: const InputDecoration(
+                    labelText: 'Password',
+                    prefixIcon: Icon(Icons.lock),
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+
+                const SizedBox(height: 25),
+
+                SizedBox(
+                  width: double.infinity,
+                  height: 50,
+                  child: ElevatedButton(
+                    onPressed: loading
+                        ? null
+                        : emailAuthentication,
+                    child: loading
+                        ? const CircularProgressIndicator()
+                        : Text(
+                            isLogin ? 'LOGIN' : 'SIGN UP',
+                          ),
+                  ),
+                ),
+
+                const SizedBox(height: 15),
+
+                const Text('OR'),
+
+                const SizedBox(height: 15),
+
+                SizedBox(
+                  width: double.infinity,
+                  height: 50,
+                  child: OutlinedButton.icon(
+                    onPressed: loading
+                        ? null
+                        : googleAuthentication,
+                    icon: const Icon(Icons.g_mobiledata),
+                    label: const Text('Continue with Google'),
+                  ),
+                ),
+
+                const SizedBox(height: 20),
+
+                TextButton(
+                  onPressed: () {
+                    setState(() {
+                      isLogin = !isLogin;
+                    });
+                  },
+                  child: Text(
+                    isLogin
+                        ? "Don't have an account? Sign Up"
+                        : 'Already have an account? Login',
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 
 class Dashboard extends StatefulWidget {
   const Dashboard({super.key});
@@ -359,9 +657,20 @@ class _DashboardState extends State<Dashboard> {
         ),
         backgroundColor: const Color(0xFF111D32),
         actions: [
-          const Icon(Icons.shield_outlined, color: Colors.blueAccent),
-          const SizedBox(width: 18),
-        ],
+  IconButton(
+    icon: const Icon(Icons.logout),
+    tooltip: 'Logout',
+    onPressed: () async {
+      await FirebaseAuth.instance.signOut();
+
+      if (!kIsWeb) {
+        await GoogleSignIn.instance.signOut();
+      }
+    },
+  ),
+  const Icon(Icons.shield_outlined, color: Colors.blueAccent),
+  const SizedBox(width: 18),
+],
       ),
 
       body: SingleChildScrollView(
