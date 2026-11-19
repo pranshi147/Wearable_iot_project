@@ -2,10 +2,12 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:permission_handler/permission_handler.dart';
-import 'package:material_ui/material_ui.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:google_sign_in/google_sign_in.dart';
 import 'firebase_options.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -81,254 +83,254 @@ class AuthPage extends StatefulWidget {
 }
 
 class _AuthPageState extends State<AuthPage> {
-  final emailController = TextEditingController();
-  final passwordController = TextEditingController();
-  final nameController = TextEditingController();
-  final phoneController = TextEditingController();
+  final _formKey = GlobalKey<FormState>();
+  final _nameController = TextEditingController();
+  final _emailController = TextEditingController();
+  final _passwordController = TextEditingController();
 
-  bool isLogin = true;
-  bool loading = false;
+  bool _isLogin = true;
+  bool _isLoading = false;
+  bool _hidePassword = true;
 
-  Future<void> saveUser(User user, {
-    String? name,
-    String? phone,
-  }) async {
-    await FirebaseFirestore.instance
-        .collection('users')
-        .doc(user.uid)
-        .set({
-      'name': name ?? user.displayName ?? '',
-      'email': user.email ?? '',
-      'phone': phone ?? '',
-      'createdAt': FieldValue.serverTimestamp(),
-    }, SetOptions(merge: true));
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _emailController.dispose();
+    _passwordController.dispose();
+    super.dispose();
   }
 
-  Future<void> emailAuthentication() async {
-    setState(() => loading = true);
-
-    try {
-      final auth = FirebaseAuth.instance;
-      UserCredential result;
-
-      if (isLogin) {
-        result = await auth.signInWithEmailAndPassword(
-          email: emailController.text.trim(),
-          password: passwordController.text.trim(),
-        );
-      } else {
-        result = await auth.createUserWithEmailAndPassword(
-          email: emailController.text.trim(),
-          password: passwordController.text.trim(),
-        );
-
-        await result.user?.updateDisplayName(
-          nameController.text.trim(),
-        );
-      }
-
-      if (result.user != null) {
-        await saveUser(
-          result.user!,
-          name: nameController.text.trim().isEmpty
-              ? null
-              : nameController.text.trim(),
-          phone: phoneController.text.trim(),
-        );
-      }
-    } on FirebaseAuthException catch (e) {
-      showError(e.message ?? 'Authentication failed');
-    } catch (e) {
-      showError(e.toString());
-    } finally {
-      if (mounted) setState(() => loading = false);
-    }
-  }
-
-  Future<void> googleAuthentication() async {
-    setState(() => loading = true);
-
-    try {
-      UserCredential result;
-
-      if (kIsWeb) {
-        final provider = GoogleAuthProvider();
-        result = await FirebaseAuth.instance.signInWithPopup(provider);
-      } else {
-        final account =
-            await GoogleSignIn.instance.authenticate();
-
-        final googleAuth = account.authentication;
-
-        final credential = GoogleAuthProvider.credential(
-          idToken: googleAuth.idToken,
-        );
-
-        result = await FirebaseAuth.instance.signInWithCredential(
-          credential,
-        );
-      }
-
-      if (result.user != null) {
-        await saveUser(result.user!);
-      }
-    } catch (e) {
-      showError(e.toString());
-    } finally {
-      if (mounted) setState(() => loading = false);
-    }
-  }
-
-  void showError(String message) {
+  void _showError(String message) {
+    if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(message)),
     );
   }
 
-  @override
-  void dispose() {
-    emailController.dispose();
-    passwordController.dispose();
-    nameController.dispose();
-    phoneController.dispose();
-    super.dispose();
+  String _friendlyError(Object error) {
+    if (error is FirebaseAuthException) {
+      switch (error.code) {
+        case 'email-already-in-use':
+          return 'This email is already registered. Please log in.';
+        case 'invalid-email':
+          return 'Please enter a valid email address.';
+        case 'weak-password':
+          return 'Choose a stronger password (at least 6 characters).';
+        case 'user-not-found':
+        case 'wrong-password':
+        case 'invalid-credential':
+          return 'Incorrect email or password.';
+        case 'network-request-failed':
+          return 'Network error. Check your internet connection.';
+        default:
+          return error.message ?? 'Authentication failed. Please try again.';
+      }
+    }
+    return 'Something went wrong: $error';
+  }
+
+  Future<void> _submitEmailPassword() async {
+    if (!_formKey.currentState!.validate()) return;
+    setState(() => _isLoading = true);
+    try {
+      final auth = FirebaseAuth.instance;
+      final email = _emailController.text.trim();
+      final password = _passwordController.text;
+      final name = _nameController.text.trim();
+
+      if (_isLogin) {
+        await auth.signInWithEmailAndPassword(
+          email: email,
+          password: password,
+        );
+      } else {
+        final credential = await auth.createUserWithEmailAndPassword(
+          email: email,
+          password: password,
+        );
+        
+        if (name.isNotEmpty) {
+          await credential.user?.updateDisplayName(name);
+          await credential.user?.reload();
+        }
+      }
+      final user = auth.currentUser;
+
+if (user != null) {
+  final name = _nameController.text.trim();
+
+  final userRef = FirebaseFirestore.instance
+              .collection('users')
+              .doc(user.uid);
+
+          await FirebaseFirestore.instance.runTransaction((transaction) async {
+            final snapshot = await transaction.get(userRef);
+
+            final data = <String, dynamic>{
+              'uid': user.uid,
+              'name': name.isNotEmpty ? name : (user.displayName ?? ''),
+              'email': user.email ?? email,
+              'updatedAt': FieldValue.serverTimestamp(),
+            };
+
+            if (!snapshot.exists) {
+              data['createdAt'] = FieldValue.serverTimestamp();
+            }
+
+            transaction.set(userRef, data, SetOptions(merge: true));
+          });
+        }
+      // AuthGate observes authStateChanges() and opens the existing dashboard.
+    } catch (error) {
+      _showError(_friendlyError(error));
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _signInWithGoogle() async {
+    setState(() => _isLoading = true);
+    try {
+      // google_sign_in 7.x uses the singleton initialize/authenticate API.
+      await GoogleSignIn.instance.initialize();
+      final googleUser = await GoogleSignIn.instance.authenticate();
+      final googleAuth = googleUser.authentication;
+      final credential = GoogleAuthProvider.credential(
+        idToken: googleAuth.idToken,
+      );
+      await FirebaseAuth.instance.signInWithCredential(credential);
+    } catch (error) {
+      _showError(_friendlyError(error));
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: Center(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(25),
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 420),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                const Icon(
-                  Icons.shield,
-                  size: 75,
-                  color: Colors.blueAccent,
-                ),
-                const SizedBox(height: 15),
-
-                const Text(
-                  'SafeWear',
-                  style: TextStyle(
-                    fontSize: 32,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-
-                const SizedBox(height: 8),
-
-                Text(
-                  isLogin
-                      ? 'Welcome Back!'
-                      : 'Create Your Account',
-                  style: const TextStyle(
-                    fontSize: 20,
-                    color: Colors.white70,
-                  ),
-                ),
-
-                const SizedBox(height: 30),
-
-                if (!isLogin) ...[
-                  TextField(
-                    controller: nameController,
-                    decoration: const InputDecoration(
-                      labelText: 'Full Name',
-                      prefixIcon: Icon(Icons.person),
-                      border: OutlineInputBorder(),
+      body: SafeArea(
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(24),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 440),
+              child: Form(
+                key: _formKey,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    const Icon(Icons.shield_rounded,
+                        color: Color(0xFF5796F5), size: 64),
+                    const SizedBox(height: 14),
+                    const Text(
+                      'SafeWear',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(fontSize: 30, fontWeight: FontWeight.bold),
                     ),
-                  ),
-                  const SizedBox(height: 15),
-
-                  TextField(
-                    controller: phoneController,
-                    keyboardType: TextInputType.phone,
-                    decoration: const InputDecoration(
-                      labelText: 'Phone Number',
-                      prefixIcon: Icon(Icons.phone),
-                      border: OutlineInputBorder(),
+                    const SizedBox(height: 8),
+                    Text(
+                      _isLogin
+                          ? 'Sign in to access your safety dashboard'
+                          : 'Create your SafeWear account',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(color: Colors.white60),
                     ),
-                  ),
-                  const SizedBox(height: 15),
-                ],
-
-                TextField(
-                  controller: emailController,
-                  keyboardType: TextInputType.emailAddress,
-                  decoration: const InputDecoration(
-                    labelText: 'Email Address',
-                    prefixIcon: Icon(Icons.email),
-                    border: OutlineInputBorder(),
-                  ),
+                    const SizedBox(height: 30),
+                    if (!_isLogin) ...[
+                      TextFormField(
+                        controller: _nameController,
+                        textCapitalization: TextCapitalization.words,
+                        decoration: const InputDecoration(
+                          labelText: 'Full name',
+                          prefixIcon: Icon(Icons.person_outline),
+                          border: OutlineInputBorder(),
+                        ),
+                        validator: (value) => !_isLogin &&
+                                (value == null || value.trim().isEmpty)
+                            ? 'Please enter your name'
+                            : null,
+                      ),
+                      const SizedBox(height: 14),
+                    ],
+                    TextFormField(
+                      controller: _emailController,
+                      keyboardType: TextInputType.emailAddress,
+                      autofillHints: const [AutofillHints.email],
+                      decoration: const InputDecoration(
+                        labelText: 'Email address',
+                        prefixIcon: Icon(Icons.email_outlined),
+                        border: OutlineInputBorder(),
+                      ),
+                      validator: (value) {
+                        final email = value?.trim() ?? '';
+                        if (email.isEmpty || !email.contains('@')) {
+                          return 'Enter a valid email address';
+                        }
+                        return null;
+                      },
+                    ),
+                    const SizedBox(height: 14),
+                    TextFormField(
+                      controller: _passwordController,
+                      obscureText: _hidePassword,
+                      autofillHints: _isLogin
+                          ? const [AutofillHints.password]
+                          : const [AutofillHints.newPassword],
+                      decoration: InputDecoration(
+                        labelText: 'Password',
+                        prefixIcon: const Icon(Icons.lock_outline),
+                        border: const OutlineInputBorder(),
+                        suffixIcon: IconButton(
+                          onPressed: () => setState(
+                              () => _hidePassword = !_hidePassword),
+                          icon: Icon(_hidePassword
+                              ? Icons.visibility_off
+                              : Icons.visibility),
+                        ),
+                      ),
+                      validator: (value) {
+                        if ((value ?? '').length < 6) {
+                          return 'Password must be at least 6 characters';
+                        }
+                        return null;
+                      },
+                    ),
+                    const SizedBox(height: 22),
+                    SizedBox(
+                      height: 50,
+                      child: ElevatedButton(
+                        onPressed: _isLoading ? null : _submitEmailPassword,
+                        child: _isLoading
+                            ? const SizedBox(
+                                height: 22,
+                                width: 22,
+                                child: CircularProgressIndicator(strokeWidth: 2),
+                              )
+                            : Text(_isLogin ? 'Log In' : 'Create Account'),
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    OutlinedButton.icon(
+                      onPressed: _isLoading ? null : _signInWithGoogle,
+                      icon: const Icon(Icons.g_mobiledata, size: 30),
+                      label: const Text('Continue with Google'),
+                    ),
+                    const SizedBox(height: 18),
+                    TextButton(
+                      onPressed: _isLoading
+                          ? null
+                          : () => setState(() {
+                                _isLogin = !_isLogin;
+                                _formKey.currentState?.reset();
+                              }),
+                      child: Text(_isLogin
+                          ? "Don't have an account? Sign up"
+                          : 'Already have an account? Log in'),
+                    ),
+                  ],
                 ),
-
-                const SizedBox(height: 15),
-
-                TextField(
-                  controller: passwordController,
-                  obscureText: true,
-                  decoration: const InputDecoration(
-                    labelText: 'Password',
-                    prefixIcon: Icon(Icons.lock),
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-
-                const SizedBox(height: 25),
-
-                SizedBox(
-                  width: double.infinity,
-                  height: 50,
-                  child: ElevatedButton(
-                    onPressed: loading
-                        ? null
-                        : emailAuthentication,
-                    child: loading
-                        ? const CircularProgressIndicator()
-                        : Text(
-                            isLogin ? 'LOGIN' : 'SIGN UP',
-                          ),
-                  ),
-                ),
-
-                const SizedBox(height: 15),
-
-                const Text('OR'),
-
-                const SizedBox(height: 15),
-
-                SizedBox(
-                  width: double.infinity,
-                  height: 50,
-                  child: OutlinedButton.icon(
-                    onPressed: loading
-                        ? null
-                        : googleAuthentication,
-                    icon: const Icon(Icons.g_mobiledata),
-                    label: const Text('Continue with Google'),
-                  ),
-                ),
-
-                const SizedBox(height: 20),
-
-                TextButton(
-                  onPressed: () {
-                    setState(() {
-                      isLogin = !isLogin;
-                    });
-                  },
-                  child: Text(
-                    isLogin
-                        ? "Don't have an account? Sign Up"
-                        : 'Already have an account? Login',
-                  ),
-                ),
-              ],
+              ),
             ),
           ),
         ),
